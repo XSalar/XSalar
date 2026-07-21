@@ -1,0 +1,77 @@
+---
+- name: Ensure stream module is enabled
+  ansible.builtin.stat:
+    path: /etc/nginx/modules-enabled/50-mod-stream.conf
+  register: stream_mod
+- name: Fail if stream module missing
+  ansible.builtin.assert:
+    that: stream_mod.stat.exists
+    fail_msg: "libnginx-mod-stream not enabled — install it (common role does)."
+
+- name: Add a top-level stream{} include block (idempotent, non-destructive)
+  ansible.builtin.blockinfile:
+    path: /etc/nginx/nginx.conf
+    marker: "# {mark} SMARTDNS STREAM"
+    block: |
+      stream {
+          include /etc/nginx/stream.d/*.conf;
+      }
+    insertafter: EOF
+  notify: reload nginx
+
+- name: Generate SNI allow-map from the domain allowlist
+  ansible.builtin.command: >
+    /opt/smartdns/scripts/gen-nginx-map.sh
+    /etc/dnsdist/domains/suffixes.conf
+    /etc/dnsdist/domains/exact.conf
+    /etc/nginx/stream.d/sni_allow.map
+  register: genmap
+  changed_when: "'wrote' in genmap.stdout"
+  notify: reload nginx
+
+- name: Render SNI proxy config
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../config/nginx/sni-proxy.conf.j2"
+    dest: /etc/nginx/stream.d/sni-proxy.conf
+    mode: "0644"
+  vars:
+    proxy_listen: "{{ node_proxy_ip }}:443"
+    resolver_addr: "{{ unbound_listen }}:{{ unbound_port }}"
+    sni_map_path: "/etc/nginx/stream.d/sni_allow.map"
+    connect_timeout: "{{ proxy_connect_timeout }}"
+    idle_timeout: "{{ proxy_idle_timeout }}"
+    proxy_error_log: "/var/log/nginx/sni-proxy-error.log"
+  notify: reload nginx
+
+- name: Validate full nginx config
+  ansible.builtin.command: nginx -t
+  changed_when: false
+
+- name: Ensure nginx service.d dir exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/nginx.service.d
+    state: directory
+    mode: "0755"
+
+- name: systemd hardening drop-in for nginx
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/nginx.service.d/10-hardening.conf
+    mode: "0644"
+    content: |
+      [Service]
+      NoNewPrivileges=true
+      ProtectHome=true
+      PrivateTmp=true
+      ProtectKernelTunables=true
+      RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+      Restart=on-failure
+      RestartSec=2
+  notify:
+    - reload systemd
+    - reload nginx
+
+- name: Enable + start nginx
+  ansible.builtin.systemd:
+    name: nginx
+    enabled: true
+    state: started

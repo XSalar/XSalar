@@ -1,0 +1,26 @@
+# Secrets & local state — never commit
+.env
+*.key
+*.pem
+*_key
+*_key.pub
+id_ed25519*
+id_rsa*
+
+# Ansible local files
+ansible/inventory.ini
+ansible/group_vars/all.yml
+ansible/*.retry
+ansible/vault-password*
+*.vault
+
+# Node-generated
+console.key
+ddns.last
+nft-snapshot.rules
+
+# Editor / OS
+*.swp
+*~
+.DS_Store
+/tmp/

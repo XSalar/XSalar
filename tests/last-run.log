@@ -1,0 +1,21 @@
+# Local logic-validation run (loopback sandbox, not production)
+# date: 2026-07-21T12:21:55Z
+# host: Linux 6.18.5 x86_64 / Ubuntu 24.04
+# dnsdist dnsdist 1.8.3 (Lua 5.1.4 [LuaJIT 2.1.1703358377]) | unbound Version 1.19.2 | nginx version: nginx/1.24.0 (Ubuntu)
+
+================ RUNNING TESTS ================
+  [32mPASS[0m T1 target A -> proxy IP (203.0.113.10)
+  [32mPASS[0m T2 target AAAA NODATA (status: NOERROR)
+  [32mPASS[0m T3 target HTTPS/SVCB NODATA
+  [32mPASS[0m T4 neutral genuine (104.20.23.154)
+  [32mPASS[0m T5 UDP+TCP both work
+  [32mPASS[0m T6 off-ACL source blocked, instance live (timed out)
+  [32mPASS[0m T8 arbitrary SNI rejected
+  [32mPASS[0m T9 missing/IP-literal SNI rejected
+  [32mPASS[0m T10+T11 allowed SNI -> genuine origin cert (subject=CN = *.youtube.com)
+  [32mPASS[0m nftables ruleset syntactically valid
+
+================ RESULT ================
+PASS=10 FAIL=0
+logs in /tmp/smartdns-val.5GRK1j (unbound.log, dnsdist.log, nginx-*.log)
+LOCAL VALIDATION: ALL GREEN

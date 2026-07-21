@@ -1,0 +1,52 @@
+---
+- name: Ensure unbound systemd drop-in dir exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/unbound.service.d
+    state: directory
+    mode: "0755"
+
+- name: Bootstrap DNSSEC root trust anchor (idempotent)
+  ansible.builtin.command: unbound-anchor -a {{ unbound_trust_anchor }}
+  register: anchor
+  changed_when: anchor.rc == 1     # rc 1 == anchor updated
+  failed_when: anchor.rc not in [0, 1]
+
+- name: Render clean resolver config
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../config/unbound/unbound.conf.j2"
+    dest: /etc/unbound/unbound.conf
+    mode: "0644"
+    validate: "unbound-checkconf %s"
+  vars:
+    unbound_dropin_glob: "/etc/unbound/unbound.conf.d/*.conf"
+  notify: restart unbound
+
+- name: systemd hardening drop-in for unbound
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/unbound.service.d/10-hardening.conf
+    mode: "0644"
+    content: |
+      [Service]
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=true
+      PrivateTmp=true
+      PrivateDevices=true
+      ProtectKernelTunables=true
+      ProtectControlGroups=true
+      RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX AF_NETLINK
+      RestrictNamespaces=true
+      MemoryDenyWriteExecute=true
+      CapabilityBoundingSet=CAP_NET_BIND_SERVICE CAP_SETUID CAP_SETGID CAP_SYS_CHROOT
+      ReadWritePaths=/var/lib/unbound
+      Restart=on-failure
+      RestartSec=2
+  notify:
+    - reload systemd
+    - restart unbound
+
+- name: Enable + start unbound
+  ansible.builtin.systemd:
+    name: unbound
+    enabled: true
+    state: started

@@ -1,0 +1,19 @@
+# Copy to inventory.ini and fill in real values. inventory.ini is gitignored.
+#
+#   ansible_host      = SSH address of the node
+#   node_proxy_ip     = the PUBLIC IPv4 the TV connects to (== DNS answer for
+#                       target domains AND the address nginx binds :443 on).
+#                       On a single-IP VPS this equals ansible_host.
+#   node_dns_ip       = the PUBLIC IPv4 the TV points its DNS at (usually the
+#                       same public IP). This is your Primary/Secondary DNS.
+#
+# Two nodes in different failure domains give real redundancy (see README).
+
+[smartdns]
+primary   ansible_host=REPLACE_PRIMARY_SSH_IP   node_proxy_ip=REPLACE_PRIMARY_PUBLIC_IP   node_dns_ip=REPLACE_PRIMARY_PUBLIC_IP   node_name=REPLACE_PRIMARY_NODE_NAME
+secondary ansible_host=REPLACE_SECONDARY_SSH_IP node_proxy_ip=REPLACE_SECONDARY_PUBLIC_IP node_dns_ip=REPLACE_SECONDARY_PUBLIC_IP node_name=REPLACE_SECONDARY_NODE_NAME
+
+[smartdns:vars]
+ansible_user=REPLACE_SSH_USER
+ansible_ssh_private_key_file=~/.ssh/id_ed25519
+ansible_python_interpreter=/usr/bin/python3

@@ -1,0 +1,47 @@
+---
+- name: Deploy DDNS updater service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/smartdns-ddns.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=SmartDNS home DDNS -> nftables allowlist updater
+      After=nftables.service unbound.service
+      Wants=unbound.service
+
+      [Service]
+      Type=oneshot
+      Environment=HOME_DDNS_NAME={{ home_ddns_name }}
+      Environment=CLEAN_RESOLVER={{ unbound_listen }}
+      Environment=CLEAN_RESOLVER_PORT={{ unbound_port }}
+      Environment=HOME_PREFIX={{ home_ddns_prefix }}
+      Environment=EXTRA_HOME_CIDRS={{ home_cidrs | join(',') }}
+      ExecStart=/opt/smartdns/scripts/ddns-update.sh
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ReadWritePaths=/var/lib/smartdns
+      ProtectHome=true
+  notify: reload systemd
+
+- name: Deploy DDNS updater timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/smartdns-ddns.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Run SmartDNS DDNS updater periodically
+
+      [Timer]
+      OnBootSec=30s
+      OnUnitActiveSec={{ ddns_interval }}
+      AccuracySec=15s
+
+      [Install]
+      WantedBy=timers.target
+  notify: reload systemd
+
+- name: Enable DDNS timer (only when a DDNS name is configured)
+  ansible.builtin.systemd:
+    name: smartdns-ddns.timer
+    enabled: "{{ home_ddns_name | length > 0 }}"
+    state: "{{ 'started' if home_ddns_name | length > 0 else 'stopped' }}"

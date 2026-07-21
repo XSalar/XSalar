@@ -1,0 +1,46 @@
+---
+- name: Render nftables ruleset
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../config/nftables/nftables.conf.j2"
+    dest: /etc/smartdns-nftables.conf
+    mode: "0640"
+    validate: "nft -c -f %s"
+  vars:
+    home_v4_elements: "{{ home_cidrs | join(', ') }}"
+    admin_v4_elements: "{{ admin_cidrs | join(', ') }}"
+  register: nft_render
+
+# Apply with the safe auto-revert wrapper so a mistake cannot lock out
+# SSH. In --check this is skipped. The operator confirms within the grace
+# window (see ROLLBACK.md). For a fully hands-off run set
+# smartdns_fw_autoconfirm=true (only when you are SURE admin_cidrs is right).
+- name: Snapshot current ruleset before applying
+  ansible.builtin.command: nft list ruleset
+  register: nft_before
+  changed_when: false
+
+- name: Save pre-change snapshot
+  ansible.builtin.copy:
+    content: "{{ nft_before.stdout }}\n"
+    dest: /var/lib/smartdns/nft-snapshot.rules
+    mode: "0640"
+
+- name: Apply firewall with armed auto-revert
+  ansible.builtin.command: >
+    /opt/smartdns/scripts/apply-firewall-safe.sh apply /etc/smartdns-nftables.conf 120
+  register: fw_apply
+  changed_when: true
+
+- name: Show firewall apply notice
+  ansible.builtin.debug:
+    msg: "{{ fw_apply.stdout_lines }}"
+
+- name: Auto-confirm firewall (only if explicitly requested)
+  ansible.builtin.command: /opt/smartdns/scripts/apply-firewall-safe.sh confirm
+  when: smartdns_fw_autoconfirm | default(false) | bool
+  changed_when: true
+
+- name: Enable nftables at boot
+  ansible.builtin.systemd:
+    name: nftables
+    enabled: true

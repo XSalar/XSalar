@@ -1,0 +1,74 @@
+---
+- name: Ensure dnsdist systemd drop-in dir exists
+  ansible.builtin.file:
+    path: /etc/systemd/system/dnsdist.service.d
+    state: directory
+    mode: "0755"
+
+# Console key is a secret: generate once on the node, never in Git.
+- name: Check for existing dnsdist console key
+  ansible.builtin.stat:
+    path: /etc/dnsdist/console.key
+  register: console_key_stat
+
+- name: Generate dnsdist console key (once)
+  ansible.builtin.shell: "set -o pipefail; dd if=/dev/urandom bs=32 count=1 2>/dev/null | base64 > /etc/dnsdist/console.key"
+  args:
+    executable: /bin/bash
+  when: not console_key_stat.stat.exists
+
+- name: Lock down console key permissions
+  ansible.builtin.file:
+    path: /etc/dnsdist/console.key
+    owner: root
+    group: root
+    mode: "0600"
+
+- name: Read console key
+  ansible.builtin.slurp:
+    src: /etc/dnsdist/console.key
+  register: console_key_b64
+
+- name: Render dnsdist smart-mapper config
+  ansible.builtin.template:
+    src: "{{ playbook_dir }}/../config/dnsdist/dnsdist.conf.j2"
+    dest: /etc/dnsdist/dnsdist.conf
+    mode: "0640"
+    validate: "dnsdist --check-config --config %s"
+  vars:
+    dns_listen: "{{ node_dns_ip | default('0.0.0.0') }}:{{ dns_listen_port }}"
+    upstream: "{{ unbound_listen }}:{{ unbound_port }}"
+    qps_limit: "{{ dnsdist_qps_limit }}"
+    proxy_ip: "{{ node_proxy_ip }}"
+    dnsdist_console_key: "{{ (console_key_b64.content | b64decode) | trim }}"
+    # dnsdist_acl_lua and home/admin elements come from play vars.
+  notify: restart dnsdist
+
+- name: systemd hardening drop-in for dnsdist
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/dnsdist.service.d/10-hardening.conf
+    mode: "0644"
+    content: |
+      [Service]
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=true
+      PrivateTmp=true
+      ProtectKernelTunables=true
+      ProtectControlGroups=true
+      RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+      RestrictNamespaces=true
+      AmbientCapabilities=CAP_NET_BIND_SERVICE
+      CapabilityBoundingSet=CAP_NET_BIND_SERVICE
+      ReadOnlyPaths=/etc/dnsdist
+      Restart=on-failure
+      RestartSec=2
+  notify:
+    - reload systemd
+    - restart dnsdist
+
+- name: Enable + start dnsdist
+  ansible.builtin.systemd:
+    name: dnsdist
+    enabled: true
+    state: started

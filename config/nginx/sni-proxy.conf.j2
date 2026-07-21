@@ -1,0 +1,44 @@
+# =====================================================================
+# TLS SNI pass-through proxy (nginx stream)  —  listens on {{ proxy_listen }}
+# ---------------------------------------------------------------------
+# PURE pass-through. TLS is never terminated, decrypted, or modified.
+# We only read the ClientHello SNI (ssl_preread), decide allow/deny from
+# the generated allow-map, and splice the raw TCP stream to the GENUINE
+# upstream host of the SAME name. End-to-end TLS between TV and origin
+# is preserved; the origin's real certificate is what the TV validates.
+#
+# This block is included INSIDE the top-level `stream { }` context.
+# =====================================================================
+
+# Resolve REAL upstream IPs via the CLEAN resolver only (never the
+# rewrite layer) — this is what prevents a proxy->self loop.
+resolver {{ resolver_addr }} valid=30s ipv6=off;
+resolver_timeout 5s;
+
+# Generated from config/domains/*.conf by scripts/gen-nginx-map.sh.
+# Sets $sni_ok = 1 for approved SNI, 0 otherwise (default deny).
+include {{ sni_map_path }};
+
+# Approved -> "host:443". Denied/empty/malformed/IP-literal -> "" which
+# makes proxy_pass fail and the connection is closed immediately.
+map $sni_ok $sni_upstream {
+    1       "$ssl_preread_server_name:443";
+    default "";
+}
+
+server {
+    listen {{ proxy_listen }};
+
+    ssl_preread on;
+
+    proxy_pass $sni_upstream;
+
+    # Timeouts tuned for long video streams.
+    proxy_connect_timeout {{ connect_timeout }};
+    proxy_timeout         {{ idle_timeout }};
+    proxy_socket_keepalive on;
+
+    # Privacy: operational errors only. No SNI, URLs, payloads, or
+    # viewing history are ever logged.
+    error_log {{ proxy_error_log }} error;
+}

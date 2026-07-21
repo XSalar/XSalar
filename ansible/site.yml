@@ -1,0 +1,34 @@
+---
+# =====================================================================
+# Smart DNS node deployment. Idempotent. Order matters:
+#   common -> unbound -> dnsdist -> nginx_sni -> healthcheck -> ddns
+#   -> nftables (firewall LAST, with safe auto-revert).
+# =====================================================================
+- name: Deploy Smart DNS node
+  hosts: smartdns
+  become: true
+  gather_facts: true
+
+  vars:
+    # Derived nft/Lua strings (single source: home_cidrs / admin_cidrs).
+    dnsdist_acl_csv: "{{ (home_cidrs + admin_cidrs) | join(', ') }}"
+    home_v4_elements: "{{ home_cidrs | join(', ') }}"
+    admin_v4_elements: "{{ admin_cidrs | join(', ') }}"
+
+  pre_tasks:
+    - name: Assert required per-host / group variables are set
+      ansible.builtin.assert:
+        that:
+          - node_proxy_ip is defined and node_proxy_ip | length > 0
+          - home_cidrs | length > 0
+          - admin_cidrs | length > 0
+        fail_msg: "Set node_proxy_ip (inventory) and home_cidrs/admin_cidrs (group_vars)."
+
+  roles:
+    - common
+    - unbound
+    - dnsdist
+    - nginx_sni
+    - healthcheck
+    - ddns
+    - nftables      # firewall applied last

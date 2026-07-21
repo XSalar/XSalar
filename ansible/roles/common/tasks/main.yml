@@ -1,0 +1,98 @@
+---
+- name: Detect distribution
+  ansible.builtin.debug:
+    msg: "{{ ansible_distribution }} {{ ansible_distribution_version }} on {{ ansible_architecture }}"
+
+- name: Fail on unsupported distro (apt-based only, by design)
+  ansible.builtin.assert:
+    that: ansible_pkg_mgr == "apt"
+    fail_msg: "This role targets Debian/Ubuntu (apt). Adapt for other distros."
+
+- name: Install packages
+  ansible.builtin.apt:
+    name:
+      - unbound
+      - dnsdist
+      - nginx
+      - libnginx-mod-stream
+      - nftables
+      - dnsutils
+      - openssl
+      - ca-certificates
+    state: present
+    update_cache: true
+    cache_valid_time: 3600
+
+- name: Create state / backup directories
+  ansible.builtin.file:
+    path: "{{ item }}"
+    state: directory
+    owner: root
+    group: root
+    mode: "0750"
+  loop:
+    - /var/lib/smartdns
+    - /var/backups/smartdns
+    - /opt/smartdns/scripts
+    - /etc/dnsdist/domains
+    - /etc/nginx/stream.d
+    - /etc/unbound/unbound.conf.d
+
+- name: One-time backup of pre-existing service configs (never overwrite)
+  ansible.builtin.shell: |
+    set -e
+    ts="{{ ansible_date_time.iso8601_basic_short }}"
+    dst="/var/backups/smartdns/$ts"
+    mkdir -p "$dst"
+    tar -czpf "$dst/configs.tar.gz" \
+      $( for p in /etc/nginx /etc/unbound /etc/dnsdist /etc/nftables.conf \
+                  /etc/systemd/system/dnsdist.service.d ; do \
+           [ -e "$p" ] && printf '%s ' "$p"; done )
+    echo "$dst"
+  args:
+    creates: "/var/backups/smartdns/.initial-done"
+  register: initial_backup
+
+- name: Mark initial backup complete
+  ansible.builtin.copy:
+    dest: /var/backups/smartdns/.initial-done
+    content: "initial backup at {{ ansible_date_time.iso8601 }}\n"
+    mode: "0640"
+  when: initial_backup is changed
+
+- name: Copy management scripts to the node
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../scripts/"
+    dest: /opt/smartdns/scripts/
+    mode: "0755"
+
+- name: Copy domain allowlist (single source of truth)
+  ansible.builtin.copy:
+    src: "{{ playbook_dir }}/../config/domains/{{ item }}"
+    dest: "/etc/dnsdist/domains/{{ item }}"
+    mode: "0644"
+  loop:
+    - suffixes.conf
+    - exact.conf
+  notify: reload dnsdist
+
+- name: Limited, privacy-friendly journald retention
+  ansible.builtin.copy:
+    dest: /etc/systemd/journald.conf.d/10-smartdns.conf
+    mode: "0644"
+    content: |
+      [Journal]
+      SystemMaxUse={{ journald_max_use }}
+      MaxRetentionSec=7day
+      ForwardToSyslog=no
+  notify: restart journald
+
+- name: Sysctl tuning for a DNS/stream proxy (built-in, no extra collections)
+  ansible.builtin.copy:
+    dest: /etc/sysctl.d/60-smartdns.conf
+    mode: "0644"
+    content: |
+      net.core.somaxconn = 1024
+      net.ipv4.tcp_fin_timeout = 20
+      net.netfilter.nf_conntrack_max = 131072
+  notify: apply sysctl

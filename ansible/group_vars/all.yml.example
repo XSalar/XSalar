@@ -1,0 +1,47 @@
+# =====================================================================
+# Copy to group_vars/all.yml and edit. Non-secret settings only.
+# Secrets (if any) belong in an Ansible Vault file or the environment,
+# never here. See .env.example and SECURITY.md.
+# =====================================================================
+
+# ---- Home / admin source allow-lists --------------------------------
+# The home networks allowed to use DNS(53) and the TLS proxy(443).
+# Use a /32 for a fixed home IP. If you use DDNS instead, leave this as
+# the static fallbacks and set home_ddns_name below.
+home_cidrs:
+  - "REPLACE_HOME_IP/32"
+
+# Admin networks allowed to reach SSH. Keep this tight.
+admin_cidrs:
+  - "REPLACE_ADMIN_IP/32"
+
+# Optional dynamic home hostname (DDNS). Empty = disabled.
+home_ddns_name: ""            # e.g. "myhome.duckdns.org"
+home_ddns_prefix: "/32"
+
+# ---- DNS behaviour --------------------------------------------------
+dns_listen_port: 53
+target_ttl: 60                # short TTL for target A answers (seconds)
+dnsdist_qps_limit: 50         # per-source-IP query rate cap
+
+# ---- Clean resolver -------------------------------------------------
+unbound_listen: "127.0.0.1"
+unbound_port: 5353
+unbound_do_ip6: "no"          # keep "no" until a tested IPv6 proxy exists
+unbound_threads: 2
+unbound_trust_anchor: "/var/lib/unbound/root.key"
+
+# ---- TLS SNI proxy --------------------------------------------------
+proxy_connect_timeout: "10s"
+proxy_idle_timeout: "120s"    # long enough for video streams
+
+# ---- Firewall rates -------------------------------------------------
+ssh_port: 22
+ssh_rate: "10/minute"
+dns_rate: "50/second"
+conn_rate: "30/second"
+
+# ---- Ops ------------------------------------------------------------
+journald_max_use: "200M"      # limited retention, privacy-friendly
+healthcheck_interval: "5min"
+ddns_interval: "2min"

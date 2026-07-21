@@ -1,0 +1,74 @@
+# =====================================================================
+# Clean upstream resolver (Unbound)  —  bound to {{ unbound_listen }}
+# ---------------------------------------------------------------------
+# This is the "genuine truth" resolver. It is:
+#   * validating + recursive (DNSSEC on)
+#   * localhost-only (never reachable from the internet)
+#   * used by BOTH the dnsdist default pool (for non-target names) AND
+#     the nginx SNI proxy (to resolve the REAL upstream IPs).
+# It NEVER points at the rewrite layer, so no resolution loop is possible.
+# =====================================================================
+server:
+    # Localhost only, non-standard port. Never public.
+    interface: {{ unbound_listen }}
+    port: {{ unbound_port }}
+    do-ip4: yes
+    do-ip6: {{ unbound_do_ip6 }}
+    do-udp: yes
+    do-tcp: yes
+
+    # Access control: allow loopback, refuse everything else.
+    access-control: 0.0.0.0/0 refuse
+    access-control: ::0/0 refuse
+    access-control: 127.0.0.0/8 allow
+    access-control: ::1 allow
+
+    # --- Privacy / correctness ---
+    qname-minimisation: yes            # send minimal labels upstream
+    aggressive-nsec: yes
+    harden-glue: yes
+    harden-dnssec-stripped: yes
+    harden-referral-path: yes
+    harden-algo-downgrade: yes
+    val-clean-additional: yes
+    # DO NOT enable send-client-subnet: EDNS Client Subnet stays OFF.
+
+    hide-identity: yes
+    hide-version: yes
+    identity: ""
+    version: ""
+
+    # --- DNSSEC ---
+    # auto-trust-anchor-file is maintained by unbound-anchor (RFC 5011).
+    auto-trust-anchor-file: "{{ unbound_trust_anchor }}"
+
+    # --- Caching ---
+    prefetch: yes
+    prefetch-key: yes
+    cache-min-ttl: 0
+    cache-max-ttl: 86400
+    cache-max-negative-ttl: 3600
+    serve-expired: yes
+    serve-expired-ttl: 30
+
+    # --- Resource / robustness ---
+    num-threads: {{ unbound_threads }}
+    so-reuseport: yes
+    edns-buffer-size: 1232
+    msg-cache-size: 64m
+    rrset-cache-size: 128m
+    unwanted-reply-threshold: 10000000
+
+    # --- Logging: operational only, no query log ---
+    verbosity: 0
+    use-syslog: yes
+    log-queries: no
+    log-replies: no
+
+    # Drop-in dir. EMPTY in production (pure recursion).
+    # The local test harness drops a forward-zone file here so it can
+    # resolve without direct root/authoritative egress.
+    include: "{{ unbound_dropin_glob }}"
+
+remote-control:
+    control-enable: no

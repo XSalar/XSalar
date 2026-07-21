@@ -1,0 +1,9 @@
+---
+- name: reload systemd
+  ansible.builtin.systemd:
+    daemon_reload: true
+
+- name: restart dnsdist
+  ansible.builtin.systemd:
+    name: dnsdist
+    state: restarted

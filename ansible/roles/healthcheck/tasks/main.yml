@@ -1,0 +1,42 @@
+---
+- name: Deploy healthcheck service
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/smartdns-health.service
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=SmartDNS node health check
+      After=dnsdist.service nginx.service unbound.service
+
+      [Service]
+      Type=oneshot
+      Environment=PROXY_IP={{ node_proxy_ip }}
+      Environment=DNS_PORT={{ dns_listen_port }}
+      Environment=CLEAN_PORT={{ unbound_port }}
+      ExecStart=/opt/smartdns/scripts/healthcheck.sh
+      NoNewPrivileges=true
+      ProtectSystem=strict
+      ProtectHome=true
+  notify: reload systemd
+
+- name: Deploy healthcheck timer
+  ansible.builtin.copy:
+    dest: /etc/systemd/system/smartdns-health.timer
+    mode: "0644"
+    content: |
+      [Unit]
+      Description=Run SmartDNS health check periodically
+
+      [Timer]
+      OnBootSec=1min
+      OnUnitActiveSec={{ healthcheck_interval }}
+
+      [Install]
+      WantedBy=timers.target
+  notify: reload systemd
+
+- name: Enable healthcheck timer
+  ansible.builtin.systemd:
+    name: smartdns-health.timer
+    enabled: true
+    state: started

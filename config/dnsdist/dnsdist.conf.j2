@@ -1,0 +1,96 @@
+-- =====================================================================
+-- Smart DNS mapper (dnsdist)  —  public-facing on TCP/UDP {{ dns_listen }}
+-- ---------------------------------------------------------------------
+-- Behaviour:
+--   * Target domains  -> A  answers spoofed to this node's PROXY IP
+--   * Target domains  -> AAAA answers = NODATA (no direct IPv6 path)
+--   * Target domains  -> HTTPS/SVCB (types 65/64) = NODATA
+--                        (kills SVCB ipv4/ipv6 hints, ECH, and h3 bypass)
+--   * Every other name -> forwarded UNCHANGED to the clean local resolver
+--
+-- This file is rendered from config/dnsdist/dnsdist.conf.j2. The domain
+-- lists are read at load time from /etc/dnsdist/domains/*.conf so they
+-- can be changed and reloaded WITHOUT editing this Lua.
+-- =====================================================================
+
+-- ---- Listeners ------------------------------------------------------
+-- addLocal handles both UDP and TCP on the same address.
+setLocal("{{ dns_listen }}")
+
+-- ---- Source allow-list (defence in depth; nftables is primary) ------
+-- Built from a plain comma/space separated CIDR list to avoid any
+-- quoting pitfalls. Empty list would mean "deny all" (fail-closed).
+local acl = {}
+for cidr in string.gmatch("{{ dnsdist_acl_csv }}", "([^,%s]+)") do
+  table.insert(acl, cidr)
+end
+setACL(acl)
+
+-- ---- Clean upstream (validating recursive resolver, localhost) ------
+-- IMPORTANT: this is the CLEAN resolver, never the rewrite layer itself.
+newServer({
+  address       = "{{ upstream }}",
+  name          = "clean-resolver",
+  checkType     = "A",
+  checkName     = "a.root-servers.net.",
+  maxCheckFailures = 3,
+})
+
+-- ---- Hardening / privacy -------------------------------------------
+setVerboseHealthChecks(false)
+-- No query logging by default. No web server / console exposed publicly.
+-- (An operator console, if enabled, must bind 127.0.0.1 with a key.)
+controlSocket("127.0.0.1:5199")
+setKey("{{ dnsdist_console_key }}")
+
+-- ---- Load target domain lists (single source of truth) --------------
+local function load_list(path)
+  local items = {}
+  local fh = io.open(path, "r")
+  if not fh then return items end
+  for line in fh:lines() do
+    line = line:gsub("#.*", "")          -- strip comments
+    line = line:gsub("%s+", "")           -- strip all whitespace
+    if line ~= "" then items[#items+1] = line end
+  end
+  fh:close()
+  return items
+end
+
+local suffixNode = newSuffixMatchNode()
+for _, d in ipairs(load_list("/etc/dnsdist/domains/suffixes.conf")) do
+  suffixNode:add(d)
+end
+
+local exactSet = newDNSNameSet()
+for _, d in ipairs(load_list("/etc/dnsdist/domains/exact.conf")) do
+  exactSet:add(newDNSName(d))
+end
+
+-- A single rule that is true for any target (suffix OR exact) name.
+local targetRule = OrRule({ SuffixMatchNodeRule(suffixNode), QNameSetRule(exactSet) })
+
+-- ---- Rate limiting (per client /32, drop above threshold) -----------
+addAction(MaxQPSIPRule({{ qps_limit }}), DropAction())
+
+-- ---- 1) AAAA(28)/HTTPS(65)/SVCB(64) on targets -> NODATA ------------
+-- Must come BEFORE the A spoof. NOERROR + no answer section == NODATA.
+--   * AAAA  -> no direct IPv6 path exists to the origin (forces IPv4/proxy)
+--   * HTTPS/SVCB -> kills ipv4hint/ipv6hint, ECH, and h3/QUIC discovery
+-- NOTE: dnsdist's SpoofAction does NOT synthesise NODATA for a family it
+-- was not given, so we assert NODATA explicitly here (verified by tests).
+addAction(
+  AndRule({ targetRule, OrRule({ QTypeRule(28), QTypeRule(65), QTypeRule(64) }) }),
+  RCodeAction(DNSRCode.NOERROR)
+)
+
+-- ---- 2) A on targets -> spoof to this node's PROXY IP ---------------
+-- Spoofed responses are NOT marked AD (never falsely "DNSSEC-signed").
+addAction(
+  AndRule({ targetRule, QTypeRule(DNSQType.A) }),
+  SpoofAction({ "{{ proxy_ip }}" })
+)
+
+-- ---- 3) Everything else -> clean resolver (default pool) ------------
+-- No further action: unmatched queries are forwarded to the default
+-- pool, which contains only the clean recursive resolver above.
